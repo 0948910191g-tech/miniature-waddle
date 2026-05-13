@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html>
+<html lang="th">
 <head>
-  <meta charset="UTF-8">
-  <title>PackMaster Demo</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+  <title>PackMaster V50 Production</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
 
@@ -11,37 +13,383 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f1f5f9;
+    }
+
+    textarea {
+      resize: none;
+    }
+  </style>
 </head>
 
-<body class="bg-slate-100">
+<body>
 
 <div id="root"></div>
 
 <script type="text/babel">
 
+const { useState, useMemo } = React;
+
+function cleanText(text) {
+  return text
+    .replace(/[\u200B-\u200F\uFEFF\xA0]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseShopeeItems(rawText) {
+
+  const lines = rawText
+    .split('\n')
+    .map(line => cleanText(line))
+    .filter(Boolean);
+
+  const items = [];
+
+  let currentItem = null;
+  let collectingName = false;
+
+  for (let i = 0; i < lines.length; i++) {
+
+    const line = lines[i];
+
+    // เริ่ม item ใหม่
+    if (/^\d+$/.test(line)) {
+
+      const nextLine = lines[i + 1] || '';
+
+      // ถัดไปต้องไม่ใช่ตัวเลข
+      if (!/^\d+$/.test(nextLine)) {
+
+        if (currentItem && currentItem.name) {
+          items.push(currentItem);
+        }
+
+        currentItem = {
+          itemNo: parseInt(line),
+          name: '',
+          qty: 1
+        };
+
+        collectingName = true;
+        continue;
+      }
+    }
+
+    // qty
+    if (
+      collectingName &&
+      currentItem &&
+      /^\d+$/.test(line)
+    ) {
+
+      const qty = parseInt(line);
+
+      if (qty <= 999) {
+        currentItem.qty = qty;
+        collectingName = false;
+        continue;
+      }
+    }
+
+    // เก็บชื่อสินค้า
+    if (collectingName && currentItem) {
+
+      const isNoise =
+        line.includes('Shopee') ||
+        line.includes('Order') ||
+        line.includes('จำนวนรวม') ||
+        line.includes('ตัวเลือกสินค้า');
+
+      if (!isNoise) {
+        currentItem.name += ' ' + line;
+      }
+    }
+  }
+
+  // push ตัวสุดท้าย
+  if (currentItem && currentItem.name) {
+    items.push(currentItem);
+  }
+
+  return items.map(item => ({
+    ...item,
+    name: cleanText(item.name)
+  }));
+}
+
+function mapSKU(items, rules) {
+
+  const skuMap = new Map();
+
+  items.forEach(item => {
+
+    const matchedRule = rules.find(rule =>
+      item.name
+        .toLowerCase()
+        .includes(rule.keyword.toLowerCase())
+    );
+
+    if (!matchedRule) return;
+
+    const currentQty =
+      skuMap.get(matchedRule.shortName) || 0;
+
+    skuMap.set(
+      matchedRule.shortName,
+      currentQty + item.qty
+    );
+  });
+
+  const output = [];
+
+  skuMap.forEach((qty, name) => {
+
+    // FIX สำคัญ
+    // ไม่คูณเลขในชื่อสินค้า
+
+    output.push(
+      qty > 1
+        ? `${name} x${qty}`
+        : name
+    );
+  });
+
+  return output;
+}
+
 function App() {
 
+  const [input, setInput] = useState(`
+1
+โฮญ่า ทิชชู่เปียก สูตรแอลกอฮอล์ 75%v/v 12 แผ่นใหญ่ HOYA
+1
+
+2
+(ยกลัง24ห่อ ไม่มีน้ำหอม) HOYA ทิชชู่เปียก baby Wipes 80แผ่น/
+ห่อ x 24แพ็ค สูตรอ่อนโยน สำหรับผิวบอบบาง
+1
+`);
+
+  const [rules, setRules] = useState([
+    {
+      keyword: '75%v/v',
+      shortName: '12แผ่น 1ห่อ'
+    },
+    {
+      keyword: 'baby wipes 80',
+      shortName: 'เด้งม่วง 1ลัง'
+    }
+  ]);
+
+  const [keyword, setKeyword] = useState('');
+  const [shortName, setShortName] = useState('');
+
+  const parsed = useMemo(() => {
+    return parseShopeeItems(input);
+  }, [input]);
+
+  const mapped = useMemo(() => {
+    return mapSKU(parsed, rules);
+  }, [parsed, rules]);
+
+  function addRule() {
+
+    if (!keyword || !shortName) return;
+
+    setRules([
+      {
+        keyword,
+        shortName
+      },
+      ...rules
+    ]);
+
+    setKeyword('');
+    setShortName('');
+  }
+
   return (
-    <div className="p-10">
+    <div className="max-w-7xl mx-auto p-10">
 
-      <h1 className="text-5xl font-black mb-5">
-        PackMaster V49
-      </h1>
+      <div className="mb-10">
+        <h1 className="text-5xl font-black mb-4 text-slate-900">
+          PackMaster V50
+        </h1>
 
-      <div className="bg-white p-8 rounded-3xl shadow">
-
-        <h2 className="text-2xl font-bold mb-4">
-          ระบบทำงานแล้ว ✅
-        </h2>
-
-        <p className="text-slate-600">
-          GitHub Pages Deploy สำเร็จ
+        <p className="text-slate-500 text-lg">
+          Production Multi SKU Parser
         </p>
+      </div>
+
+      <div className="grid grid-cols-12 gap-8">
+
+        {/* LEFT */}
+
+        <div className="col-span-5">
+
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 mb-6">
+
+            <h2 className="text-2xl font-black mb-5">
+              Raw PDF Text
+            </h2>
+
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              className="w-full h-[700px] border border-slate-200 rounded-2xl p-5 font-mono text-sm outline-none"
+            />
+
+          </div>
+
+        </div>
+
+        {/* CENTER */}
+
+        <div className="col-span-3">
+
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 mb-6">
+
+            <h2 className="text-2xl font-black mb-5">
+              SKU Mapping
+            </h2>
+
+            <div className="space-y-4 mb-6">
+
+              <input
+                placeholder="Keyword"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                className="w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none"
+              />
+
+              <input
+                placeholder="Short Name"
+                value={shortName}
+                onChange={(e) => setShortName(e.target.value)}
+                className="w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none"
+              />
+
+              <button
+                onClick={addRule}
+                className="w-full bg-slate-900 text-white py-3 rounded-2xl font-bold"
+              >
+                เพิ่ม Mapping
+              </button>
+
+            </div>
+
+            <div className="space-y-3">
+
+              {rules.map((rule, index) => (
+
+                <div
+                  key={index}
+                  className="border border-slate-200 rounded-2xl p-4"
+                >
+
+                  <div className="font-bold text-sm text-slate-400 mb-2">
+                    KEYWORD
+                  </div>
+
+                  <div className="font-black text-slate-900 mb-4">
+                    {rule.keyword}
+                  </div>
+
+                  <div className="font-bold text-sm text-slate-400 mb-2">
+                    OUTPUT
+                  </div>
+
+                  <div className="bg-slate-100 px-4 py-3 rounded-xl font-black">
+                    {rule.shortName}
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* RIGHT */}
+
+        <div className="col-span-4">
+
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 mb-6">
+
+            <h2 className="text-2xl font-black mb-5">
+              Parsed Items
+            </h2>
+
+            <div className="space-y-4">
+
+              {parsed.map((item, index) => (
+
+                <div
+                  key={index}
+                  className="border border-slate-200 rounded-2xl p-4"
+                >
+
+                  <div className="flex justify-between items-center mb-3">
+
+                    <div className="font-black text-slate-900">
+                      ITEM #{item.itemNo}
+                    </div>
+
+                    <div className="bg-blue-100 text-blue-900 px-3 py-1 rounded-xl font-black">
+                      x{item.qty}
+                    </div>
+
+                  </div>
+
+                  <div className="text-sm text-slate-600 leading-relaxed">
+                    {item.name}
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
+
+            <h2 className="text-2xl font-black mb-5">
+              Final Label Output
+            </h2>
+
+            <div className="space-y-4">
+
+              {mapped.map((item, index) => (
+
+                <div
+                  key={index}
+                  className="bg-slate-900 text-white rounded-2xl px-5 py-5 font-black text-2xl"
+                >
+                  • {item}
+                </div>
+
+              ))}
+
+            </div>
+
+          </div>
+
+        </div>
 
       </div>
 
     </div>
-  )
+  );
 }
 
 const root = ReactDOM.createRoot(
