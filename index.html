@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 
-  <title>PackMaster V50 Production</title>
+  <title>PackMaster V51</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
 
@@ -15,13 +15,13 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
-    body {
-      font-family: sans-serif;
-      background: #f1f5f9;
+    body{
+      font-family:sans-serif;
+      background:#f1f5f9;
     }
 
-    textarea {
-      resize: none;
+    textarea{
+      resize:none;
     }
   </style>
 </head>
@@ -32,16 +32,16 @@
 
 <script type="text/babel">
 
-const { useState, useMemo } = React;
+const { useState, useEffect, useMemo } = React;
 
-function cleanText(text) {
+function cleanText(text){
   return text
-    .replace(/[\u200B-\u200F\uFEFF\xA0]/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/[\u200B-\u200F\uFEFF\xA0]/g,' ')
+    .replace(/\s+/g,' ')
     .trim();
 }
 
-function parseShopeeItems(rawText) {
+function parseShopeeItems(rawText){
 
   const lines = rawText
     .split('\n')
@@ -53,26 +53,25 @@ function parseShopeeItems(rawText) {
   let currentItem = null;
   let collectingName = false;
 
-  for (let i = 0; i < lines.length; i++) {
+  for(let i=0;i<lines.length;i++){
 
     const line = lines[i];
 
     // เริ่ม item ใหม่
-    if (/^\d+$/.test(line)) {
+    if(/^\d+$/.test(line)){
 
-      const nextLine = lines[i + 1] || '';
+      const nextLine = lines[i+1] || '';
 
-      // ถัดไปต้องไม่ใช่ตัวเลข
-      if (!/^\d+$/.test(nextLine)) {
+      if(!/^\d+$/.test(nextLine)){
 
-        if (currentItem && currentItem.name) {
+        if(currentItem && currentItem.name){
           items.push(currentItem);
         }
 
         currentItem = {
           itemNo: parseInt(line),
-          name: '',
-          qty: 1
+          name:'',
+          qty:1
         };
 
         collectingName = true;
@@ -81,23 +80,24 @@ function parseShopeeItems(rawText) {
     }
 
     // qty
-    if (
+    if(
       collectingName &&
       currentItem &&
       /^\d+$/.test(line)
-    ) {
+    ){
 
       const qty = parseInt(line);
 
-      if (qty <= 999) {
+      if(qty <= 999){
+
         currentItem.qty = qty;
         collectingName = false;
         continue;
       }
     }
 
-    // เก็บชื่อสินค้า
-    if (collectingName && currentItem) {
+    // collect name
+    if(collectingName && currentItem){
 
       const isNoise =
         line.includes('Shopee') ||
@@ -105,14 +105,13 @@ function parseShopeeItems(rawText) {
         line.includes('จำนวนรวม') ||
         line.includes('ตัวเลือกสินค้า');
 
-      if (!isNoise) {
+      if(!isNoise){
         currentItem.name += ' ' + line;
       }
     }
   }
 
-  // push ตัวสุดท้าย
-  if (currentItem && currentItem.name) {
+  if(currentItem && currentItem.name){
     items.push(currentItem);
   }
 
@@ -122,84 +121,85 @@ function parseShopeeItems(rawText) {
   }));
 }
 
-function mapSKU(items, rules) {
+function App(){
 
-  const skuMap = new Map();
-
-  items.forEach(item => {
-
-    const matchedRule = rules.find(rule =>
-      item.name
-        .toLowerCase()
-        .includes(rule.keyword.toLowerCase())
-    );
-
-    if (!matchedRule) return;
-
-    const currentQty =
-      skuMap.get(matchedRule.shortName) || 0;
-
-    skuMap.set(
-      matchedRule.shortName,
-      currentQty + item.qty
-    );
-  });
-
-  const output = [];
-
-  skuMap.forEach((qty, name) => {
-
-    // FIX สำคัญ
-    // ไม่คูณเลขในชื่อสินค้า
-
-    output.push(
-      qty > 1
-        ? `${name} x${qty}`
-        : name
-    );
-  });
-
-  return output;
-}
-
-function App() {
-
-  const [input, setInput] = useState(`
-1
-โฮญ่า ทิชชู่เปียก สูตรแอลกอฮอล์ 75%v/v 12 แผ่นใหญ่ HOYA
-1
-
-2
-(ยกลัง24ห่อ ไม่มีน้ำหอม) HOYA ทิชชู่เปียก baby Wipes 80แผ่น/
-ห่อ x 24แพ็ค สูตรอ่อนโยน สำหรับผิวบอบบาง
-1
-`);
-
-  const [rules, setRules] = useState([
+  const defaultRules = [
     {
-      keyword: '75%v/v',
-      shortName: '12แผ่น 1ห่อ'
+      keyword:'75%v/v',
+      shortName:'12แผ่น 1ห่อ'
     },
     {
-      keyword: 'baby wipes 80',
-      shortName: 'เด้งม่วง 1ลัง'
+      keyword:'baby wipes 80',
+      shortName:'เด้งม่วง 1ลัง'
     }
-  ]);
+  ];
 
-  const [keyword, setKeyword] = useState('');
-  const [shortName, setShortName] = useState('');
+  const [input,setInput] = useState('');
+
+  const [rules,setRules] = useState(() => {
+
+    const saved = localStorage.getItem('skuRules');
+
+    return saved
+      ? JSON.parse(saved)
+      : defaultRules;
+  });
+
+  const [keyword,setKeyword] = useState('');
+  const [shortName,setShortName] = useState('');
+
+  useEffect(() => {
+    localStorage.setItem(
+      'skuRules',
+      JSON.stringify(rules)
+    );
+  }, [rules]);
 
   const parsed = useMemo(() => {
     return parseShopeeItems(input);
   }, [input]);
 
-  const mapped = useMemo(() => {
-    return mapSKU(parsed, rules);
+  const output = useMemo(() => {
+
+    const skuMap = new Map();
+
+    parsed.forEach(item => {
+
+      const matchedRule = rules.find(rule =>
+        item.name
+          .toLowerCase()
+          .includes(rule.keyword.toLowerCase())
+      );
+
+      if(!matchedRule) return;
+
+      const currentQty =
+        skuMap.get(matchedRule.shortName) || 0;
+
+      skuMap.set(
+        matchedRule.shortName,
+        currentQty + item.qty
+      );
+    });
+
+    const arr = [];
+
+    skuMap.forEach((qty,name) => {
+
+      arr.push(
+        qty > 1
+          ? `${name} x${qty}`
+          : name
+      );
+    });
+
+    return arr;
+
   }, [parsed, rules]);
 
-  function addRule() {
+  function addRule(){
 
-    if (!keyword || !shortName) return;
+    if(!keyword || !shortName) return;
 
     setRules([
       {
@@ -213,17 +213,62 @@ function App() {
     setShortName('');
   }
 
-  return (
+  function removeRule(index){
+
+    const copy = [...rules];
+
+    copy.splice(index,1);
+
+    setRules(copy);
+  }
+
+  function copyOutput(){
+
+    navigator.clipboard.writeText(
+      output.join('\n')
+    );
+
+    alert('คัดลอกแล้ว');
+  }
+
+  function loadExample(){
+
+    setInput(`
+1
+โฮญ่า ทิชชู่เปียก สูตรแอลกอฮอล์ 75%v/v 12 แผ่นใหญ่ HOYA
+1
+
+2
+(ยกลัง24ห่อ ไม่มีน้ำหอม) HOYA ทิชชู่เปียก baby Wipes 80แผ่น/
+ห่อ x 24แพ็ค สูตรอ่อนโยน สำหรับผิวบอบบาง
+1
+`);
+  }
+
+  return(
     <div className="max-w-7xl mx-auto p-10">
 
-      <div className="mb-10">
-        <h1 className="text-5xl font-black mb-4 text-slate-900">
-          PackMaster V50
-        </h1>
+      <div className="flex justify-between items-center mb-10">
 
-        <p className="text-slate-500 text-lg">
-          Production Multi SKU Parser
-        </p>
+        <div>
+
+          <h1 className="text-5xl font-black text-slate-900 mb-3">
+            PackMaster V51
+          </h1>
+
+          <p className="text-slate-500 text-lg">
+            Multi SKU Production Parser
+          </p>
+
+        </div>
+
+        <button
+          onClick={loadExample}
+          className="bg-slate-900 text-white px-6 py-4 rounded-2xl font-bold"
+        >
+          โหลดตัวอย่าง
+        </button>
+
       </div>
 
       <div className="grid grid-cols-12 gap-8">
@@ -232,15 +277,23 @@ function App() {
 
         <div className="col-span-5">
 
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 mb-6">
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
 
-            <h2 className="text-2xl font-black mb-5">
-              Raw PDF Text
-            </h2>
+            <div className="flex justify-between items-center mb-5">
+
+              <h2 className="text-2xl font-black">
+                Raw PDF Text
+              </h2>
+
+              <div className="text-sm text-slate-400">
+                Paste PDF Text
+              </div>
+
+            </div>
 
             <textarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e)=>setInput(e.target.value)}
               className="w-full h-[700px] border border-slate-200 rounded-2xl p-5 font-mono text-sm outline-none"
             />
 
@@ -252,7 +305,7 @@ function App() {
 
         <div className="col-span-3">
 
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 mb-6">
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
 
             <h2 className="text-2xl font-black mb-5">
               SKU Mapping
@@ -263,14 +316,14 @@ function App() {
               <input
                 placeholder="Keyword"
                 value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
+                onChange={(e)=>setKeyword(e.target.value)}
                 className="w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none"
               />
 
               <input
                 placeholder="Short Name"
                 value={shortName}
-                onChange={(e) => setShortName(e.target.value)}
+                onChange={(e)=>setShortName(e.target.value)}
                 className="w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none"
               />
 
@@ -283,28 +336,43 @@ function App() {
 
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-[500px] overflow-auto">
 
-              {rules.map((rule, index) => (
+              {rules.map((rule,index)=>(
 
                 <div
                   key={index}
                   className="border border-slate-200 rounded-2xl p-4"
                 >
 
-                  <div className="font-bold text-sm text-slate-400 mb-2">
-                    KEYWORD
+                  <div className="flex justify-between items-start mb-4">
+
+                    <div>
+
+                      <div className="text-xs font-bold text-slate-400 mb-1">
+                        KEYWORD
+                      </div>
+
+                      <div className="font-black">
+                        {rule.keyword}
+                      </div>
+
+                    </div>
+
+                    <button
+                      onClick={()=>removeRule(index)}
+                      className="text-red-500 font-bold"
+                    >
+                      ลบ
+                    </button>
+
                   </div>
 
-                  <div className="font-black text-slate-900 mb-4">
-                    {rule.keyword}
-                  </div>
-
-                  <div className="font-bold text-sm text-slate-400 mb-2">
+                  <div className="text-xs font-bold text-slate-400 mb-1">
                     OUTPUT
                   </div>
 
-                  <div className="bg-slate-100 px-4 py-3 rounded-xl font-black">
+                  <div className="bg-slate-100 rounded-xl px-4 py-3 font-black">
                     {rule.shortName}
                   </div>
 
@@ -328,9 +396,9 @@ function App() {
               Parsed Items
             </h2>
 
-            <div className="space-y-4">
+            <div className="space-y-4 max-h-[350px] overflow-auto">
 
-              {parsed.map((item, index) => (
+              {parsed.map((item,index)=>(
 
                 <div
                   key={index}
@@ -339,7 +407,7 @@ function App() {
 
                   <div className="flex justify-between items-center mb-3">
 
-                    <div className="font-black text-slate-900">
+                    <div className="font-black">
                       ITEM #{item.itemNo}
                     </div>
 
@@ -363,13 +431,32 @@ function App() {
 
           <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
 
-            <h2 className="text-2xl font-black mb-5">
-              Final Label Output
-            </h2>
+            <div className="flex justify-between items-center mb-5">
+
+              <h2 className="text-2xl font-black">
+                Final Label Output
+              </h2>
+
+              <button
+                onClick={copyOutput}
+                className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold"
+              >
+                Copy
+              </button>
+
+            </div>
 
             <div className="space-y-4">
 
-              {mapped.map((item, index) => (
+              {output.length === 0 && (
+
+                <div className="text-slate-400 text-center py-10">
+                  ไม่มีข้อมูล
+                </div>
+
+              )}
+
+              {output.map((item,index)=>(
 
                 <div
                   key={index}
@@ -389,7 +476,7 @@ function App() {
       </div>
 
     </div>
-  );
+  )
 }
 
 const root = ReactDOM.createRoot(
