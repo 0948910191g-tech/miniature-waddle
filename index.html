@@ -1,270 +1,47 @@
 <!DOCTYPE html>
-<html lang="th">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>PackMaster V49 FIXED</title>
+  <meta charset="UTF-8">
+  <title>PackMaster Demo</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
 
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <style>
-    body {
-      font-family: sans-serif;
-      background: #f8fafc;
-    }
-  </style>
 </head>
 
-<body>
+<body class="bg-slate-100">
 
 <div id="root"></div>
 
 <script type="text/babel">
 
-const { useState, useMemo } = React;
-
-function cleanText(text) {
-  return text
-    .replace(/[\u200B-\u200F\uFEFF\xA0]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function parseShopeeItems(rawText) {
-
-  const lines = rawText
-    .split('\n')
-    .map(line => cleanText(line))
-    .filter(Boolean);
-
-  const items = [];
-
-  let currentItem = null;
-  let collectingName = false;
-
-  for (let i = 0; i < lines.length; i++) {
-
-    const line = lines[i];
-
-    // เริ่มสินค้าใหม่
-    if (/^\d+$/.test(line)) {
-
-      const nextLine = lines[i + 1] || '';
-
-      if (!/^\d+$/.test(nextLine)) {
-
-        if (currentItem && currentItem.name) {
-          items.push(currentItem);
-        }
-
-        currentItem = {
-          itemNo: parseInt(line),
-          name: '',
-          qty: 1
-        };
-
-        collectingName = true;
-        continue;
-      }
-    }
-
-    // จำนวนสินค้า
-    if (
-      collectingName &&
-      currentItem &&
-      /^\d+$/.test(line)
-    ) {
-
-      const qty = parseInt(line);
-
-      if (qty <= 999) {
-        currentItem.qty = qty;
-        collectingName = false;
-        continue;
-      }
-    }
-
-    // เก็บชื่อสินค้า
-    if (collectingName && currentItem) {
-
-      const isNoise =
-        line.includes('Shopee') ||
-        line.includes('Order') ||
-        line.includes('จำนวนรวม') ||
-        line.includes('ตัวเลือกสินค้า');
-
-      if (!isNoise) {
-        currentItem.name += ' ' + line;
-      }
-    }
-  }
-
-  if (currentItem && currentItem.name) {
-    items.push(currentItem);
-  }
-
-  return items.map(item => ({
-    ...item,
-    name: cleanText(item.name)
-  }));
-}
-
-function mapSKU(items, rules) {
-
-  const skuMap = new Map();
-
-  items.forEach(item => {
-
-    const matchedRule = rules.find(rule =>
-      item.name.toLowerCase().includes(
-        rule.keyword.toLowerCase()
-      )
-    );
-
-    if (!matchedRule) return;
-
-    const currentQty =
-      skuMap.get(matchedRule.shortName) || 0;
-
-    skuMap.set(
-      matchedRule.shortName,
-      currentQty + item.qty
-    );
-  });
-
-  const output = [];
-
-  skuMap.forEach((qty, name) => {
-
-    // FIX สำคัญ
-    // ไม่คูณเลขในชื่อสินค้า
-
-    output.push(
-      qty > 1
-        ? `${name} x${qty}`
-        : name
-    );
-  });
-
-  return output;
-}
-
 function App() {
 
-  const [input, setInput] = useState(`
-1
-โฮญ่า ทิชชู่เปียก สูตรแอลกอฮอล์ 75%v/v 12 แผ่นใหญ่ HOYA
-1
-2
-(ยกลัง24ห่อ ไม่มีน้ำหอม) HOYA ทิชชู่เปียก baby Wipes 80แผ่น/
-ห่อ x 24แพ็ค สูตรอ่อนโยน สำหรับผิวบอบบาง
-1
-`);
-
-  const rules = [
-    {
-      keyword: '75%v/v',
-      shortName: '12แผ่น 1ห่อ'
-    },
-    {
-      keyword: 'baby wipes 80',
-      shortName: 'เด้งม่วง 1ลัง'
-    }
-  ];
-
-  const parsed = useMemo(() => {
-    return parseShopeeItems(input);
-  }, [input]);
-
-  const mapped = useMemo(() => {
-    return mapSKU(parsed, rules);
-  }, [parsed]);
-
   return (
-    <div className="max-w-6xl mx-auto p-10">
+    <div className="p-10">
 
-      <div className="mb-10">
-        <h1 className="text-4xl font-black mb-3 text-slate-900">
-          PackMaster V49 FIXED
-        </h1>
+      <h1 className="text-5xl font-black mb-5">
+        PackMaster V49
+      </h1>
 
-        <p className="text-slate-500 font-semibold">
-          Fixed Multi SKU Parser Engine
+      <div className="bg-white p-8 rounded-3xl shadow">
+
+        <h2 className="text-2xl font-bold mb-4">
+          ระบบทำงานแล้ว ✅
+        </h2>
+
+        <p className="text-slate-600">
+          GitHub Pages Deploy สำเร็จ
         </p>
+
       </div>
 
-      <div className="grid grid-cols-2 gap-8">
-
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-
-          <h2 className="font-black text-xl mb-5">
-            Raw PDF Text
-          </h2>
-
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            className="w-full h-[500px] border border-slate-200 rounded-2xl p-5 font-mono text-sm outline-none"
-          />
-        </div>
-
-        <div className="space-y-6">
-
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-
-            <h2 className="font-black text-xl mb-5">
-              Parsed Items
-            </h2>
-
-            <div className="space-y-4">
-              {parsed.map((item, index) => (
-                <div
-                  key={index}
-                  className="border border-slate-200 rounded-2xl p-4"
-                >
-                  <div className="font-black text-slate-900 mb-2">
-                    ITEM #{item.itemNo}
-                  </div>
-
-                  <div className="text-sm text-slate-600 mb-3 leading-relaxed">
-                    {item.name}
-                  </div>
-
-                  <div className="inline-block bg-blue-100 text-blue-900 px-4 py-2 rounded-xl font-black">
-                    Qty: {item.qty}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-
-            <h2 className="font-black text-xl mb-5">
-              Final Label Output
-            </h2>
-
-            <div className="space-y-3">
-              {mapped.map((item, index) => (
-                <div
-                  key={index}
-                  className="bg-slate-900 text-white px-5 py-4 rounded-2xl font-black text-xl"
-                >
-                  • {item}
-                </div>
-              ))}
-            </div>
-
-          </div>
-        </div>
-      </div>
     </div>
-  );
+  )
 }
 
 const root = ReactDOM.createRoot(
