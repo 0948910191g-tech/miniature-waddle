@@ -1,491 +1,624 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-
-  <title>PackMaster V51</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PackMaster V52</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
-
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
   <style>
-    body{
-      font-family:sans-serif;
-      background:#f1f5f9;
-    }
-
-    textarea{
-      resize:none;
-    }
+    body { font-family: sans-serif; background: #f3f6fb; }
+    textarea { resize: vertical; }
+    .thin-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+    .thin-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
   </style>
+
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  </script>
 </head>
-
 <body>
+  <div id="root"></div>
 
-<div id="root"></div>
+  <script type="text/babel">
+    const { useEffect, useMemo, useState } = React;
 
-<script type="text/babel">
+    const DEFAULT_RULES = [
+      { id: 1, keyword: "75%v/v", shortName: "12แผ่น 1ห่อ" },
+      { id: 2, keyword: "baby wipes 80", shortName: "เด้งม่วง 1ลัง" }
+    ];
 
-const { useState, useEffect, useMemo } = React;
+    function cleanText(text) {
+      return String(text || "")
+        .replace(/[\u200B-\u200F\uFEFF\xA0]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
 
-function cleanText(text){
-  return text
-    .replace(/[\u200B-\u200F\uFEFF\xA0]/g,' ')
-    .replace(/\s+/g,' ')
-    .trim();
-}
+    function isNoiseLine(line) {
+      const s = cleanText(line).toLowerCase();
+      if (!s) return true;
+      return [
+        "shopee", "tiktok", "order", "order id", "pickup date",
+        "ship by date", "tracking", "ผู้รับ", "ผู้ส่ง", "note",
+        "จำนวนรวม", "total qty", "รวมทั้งสิ้น", "ship to", "from",
+        "office", "ros", "seller", "buyer"
+      ].some(k => s.includes(k));
+    }
 
-function parseShopeeItems(rawText){
+    function normalizeForMatch(text) {
+      return cleanText(text)
+        .toLowerCase()
+        .replace(/\u0e33/g, "า")
+        .replace(/[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]/g, "")
+        .replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
 
-  const lines = rawText
-    .split('\n')
-    .map(line => cleanText(line))
-    .filter(Boolean);
+    function matchRule(itemText, rules) {
+      const src = normalizeForMatch(itemText);
+      if (!src) return null;
 
-  const items = [];
+      const sorted = [...rules]
+        .filter(r => cleanText(r.keyword))
+        .sort((a, b) => normalizeForMatch(b.keyword).length - normalizeForMatch(a.keyword).length);
 
-  let currentItem = null;
-  let collectingName = false;
+      for (const rule of sorted) {
+        const kw = normalizeForMatch(rule.keyword);
+        if (kw && src.includes(kw)) return rule;
+      }
+      return null;
+    }
 
-  for(let i=0;i<lines.length;i++){
+    function extractItemsFromText(fullText) {
+      const lines = cleanText(fullText)
+        .split("\n")
+        .map(l => cleanText(l))
+        .filter(Boolean)
+        .filter(l => !isNoiseLine(l));
 
-    const line = lines[i];
+      const items = [];
+      let current = null;
+      let collectingName = false;
 
-    // เริ่ม item ใหม่
-    if(/^\d+$/.test(line)){
+      const pushCurrent = () => {
+        if (current && cleanText(current.name)) {
+          current.name = cleanText(current.name);
+          items.push(current);
+        }
+        current = null;
+        collectingName = false;
+      };
 
-      const nextLine = lines[i+1] || '';
+      for (let i = 0; i < lines.length; i++) {
+        const line = cleanText(lines[i]);
+        if (!line) continue;
 
-      if(!/^\d+$/.test(nextLine)){
+        // เริ่ม item ใหม่เมื่อเจอเลขลำดับบรรทัดเดี่ยว
+        if (/^\d+$/.test(line)) {
+          const next = cleanText(lines[i + 1] || "");
+          const prev = cleanText(lines[i - 1] || "");
 
-        if(currentItem && currentItem.name){
-          items.push(currentItem);
+          // ถ้าเพิ่งกำลังเก็บ item อยู่ และเจอเลขเดี่ยวหลังชื่อสินค้า -> มักเป็น qty
+          if (current && collectingName && current.name) {
+            const qty = parseInt(line, 10);
+            if (qty >= 1 && qty <= 999) {
+              current.qty = qty;
+              pushCurrent();
+              continue;
+            }
+          }
+
+          // ถ้าเป็นเลขลำดับสินค้าใหม่
+          if (!current || (!collectingName && !current.name)) {
+            if (current) pushCurrent();
+            current = {
+              itemNo: parseInt(line, 10),
+              name: "",
+              qty: 1
+            };
+            collectingName = true;
+            continue;
+          }
+
+          // fallback: ถ้า current มีอยู่แต่ยังไม่ชัด ให้ถือว่าเป็น qty
+          if (current && collectingName && current.name) {
+            const qty = parseInt(line, 10);
+            if (qty >= 1 && qty <= 999) {
+              current.qty = qty;
+              pushCurrent();
+              continue;
+            }
+          }
         }
 
-        currentItem = {
-          itemNo: parseInt(line),
-          name:'',
-          qty:1
+        if (current && collectingName) {
+          if (!isNoiseLine(line)) {
+            current.name += (current.name ? " " : "") + line;
+          }
+        }
+      }
+
+      if (current && current.name) pushCurrent();
+
+      // fallback ถ้า parse แบบ item ไม่ได้ ให้หยิบบรรทัดที่มี text จริงมาเป็น 1 item
+      if (items.length === 0) {
+        const fallbackText = lines.filter(l => !/^\d+$/.test(l)).join(" ");
+        if (fallbackText) {
+          items.push({ itemNo: 1, name: fallbackText, qty: 1 });
+        }
+      }
+
+      return items;
+    }
+
+    async function extractTextFromPdfFile(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+      let fullText = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const text = await page.getTextContent();
+        const pageText = text.items.map(item => item.str).join(" ");
+        fullText += "\n" + pageText;
+      }
+
+      return fullText;
+    }
+
+    function App() {
+      const [rules, setRules] = useState(() => {
+        try {
+          const saved = localStorage.getItem("packmaster_rules");
+          if (saved) return JSON.parse(saved);
+        } catch (e) {}
+        return DEFAULT_RULES;
+      });
+
+      const [activeTab, setActiveTab] = useState("upload");
+      const [uploadMode, setUploadMode] = useState("pdf");
+      const [loading, setLoading] = useState(false);
+      const [message, setMessage] = useState("");
+      const [messageType, setMessageType] = useState("success");
+      const [rawText, setRawText] = useState("");
+      const [orders, setOrders] = useState([]);
+      const [newRule, setNewRule] = useState({ keyword: "", shortName: "" });
+      const [editingId, setEditingId] = useState(null);
+      const [testInput, setTestInput] = useState("");
+
+      useEffect(() => {
+        localStorage.setItem("packmaster_rules", JSON.stringify(rules));
+      }, [rules]);
+
+      const parsedItems = useMemo(() => {
+        return extractItemsFromText(rawText);
+      }, [rawText]);
+
+      const mappedItems = useMemo(() => {
+        return parsedItems.map(item => {
+          const rule = matchRule(item.name, rules);
+          const display = rule
+            ? (item.qty > 1 ? `${rule.shortName} x${item.qty}` : rule.shortName)
+            : "ยังไม่ตั้งชื่อ (เพิ่มกฎ SKU)";
+          return { ...item, matchedRule: rule, display };
+        });
+      }, [parsedItems, rules]);
+
+      const summaryOutput = useMemo(() => {
+        const skuMap = new Map();
+        mappedItems.forEach(item => {
+          if (!item.matchedRule) return;
+          const key = item.matchedRule.shortName;
+          skuMap.set(key, (skuMap.get(key) || 0) + item.qty);
+        });
+
+        return Array.from(skuMap.entries()).map(([name, qty]) =>
+          qty > 1 ? `${name} x${qty}` : name
+        );
+      }, [mappedItems]);
+
+      function toast(text, type = "success") {
+        setMessage(text);
+        setMessageType(type);
+        window.clearTimeout(window.__pm_t);
+        window.__pm_t = window.setTimeout(() => setMessage(""), 2600);
+      }
+
+      async function handlePdfUpload(e) {
+        const files = Array.from(e.target.files || []);
+        if (!files.length) return;
+
+        setLoading(true);
+        try {
+          const allOrders = [];
+
+          for (const file of files) {
+            if (!file.name.toLowerCase().endsWith(".pdf")) continue;
+            const text = await extractTextFromPdfFile(file);
+            const items = extractItemsFromText(text);
+
+            allOrders.push({
+              id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              fileName: file.name,
+              rawText: text,
+              items
+            });
+          }
+
+          if (!allOrders.length) {
+            toast("ไม่พบไฟล์ PDF ที่รองรับ", "error");
+          } else {
+            setOrders(prev => [...allOrders, ...prev]);
+            setRawText(allOrders[0].rawText || "");
+            setActiveTab("preview");
+            toast(`นำเข้าไฟล์สำเร็จ ${allOrders.length} ไฟล์`);
+          }
+        } catch (err) {
+          console.error(err);
+          toast("อ่านไฟล์ PDF ไม่สำเร็จ", "error");
+        } finally {
+          setLoading(false);
+          e.target.value = "";
+        }
+      }
+
+      function handleTextInputUpload(e) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          setRawText(String(reader.result || ""));
+          setActiveTab("preview");
+          toast("นำเข้า text สำเร็จ");
         };
-
-        collectingName = true;
-        continue;
+        reader.readAsText(file, "utf-8");
+        e.target.value = "";
       }
-    }
 
-    // qty
-    if(
-      collectingName &&
-      currentItem &&
-      /^\d+$/.test(line)
-    ){
+      function addRule() {
+        if (!cleanText(newRule.keyword) || !cleanText(newRule.shortName)) return;
 
-      const qty = parseInt(line);
+        if (editingId !== null) {
+          setRules(prev => prev.map(r => r.id === editingId ? { ...r, ...newRule } : r));
+          setEditingId(null);
+          toast("แก้ไขกฎสำเร็จ");
+        } else {
+          setRules(prev => [
+            { id: Date.now(), keyword: cleanText(newRule.keyword), shortName: cleanText(newRule.shortName) },
+            ...prev
+          ]);
+          toast("เพิ่มกฎสำเร็จ");
+        }
 
-      if(qty <= 999){
-
-        currentItem.qty = qty;
-        collectingName = false;
-        continue;
+        setNewRule({ keyword: "", shortName: "" });
       }
-    }
 
-    // collect name
-    if(collectingName && currentItem){
-
-      const isNoise =
-        line.includes('Shopee') ||
-        line.includes('Order') ||
-        line.includes('จำนวนรวม') ||
-        line.includes('ตัวเลือกสินค้า');
-
-      if(!isNoise){
-        currentItem.name += ' ' + line;
+      function editRule(rule) {
+        setNewRule({ keyword: rule.keyword, shortName: rule.shortName });
+        setEditingId(rule.id);
+        setActiveTab("mapping");
       }
-    }
-  }
 
-  if(currentItem && currentItem.name){
-    items.push(currentItem);
-  }
+      function removeRule(id) {
+        setRules(prev => prev.filter(r => r.id !== id));
+        toast("ลบกฎแล้ว");
+      }
 
-  return items.map(item => ({
-    ...item,
-    name: cleanText(item.name)
-  }));
-}
+      function importRulesFile(e) {
+        const file = e.target.files?.[0];
+        if (!file) return;
 
-function App(){
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(String(reader.result || "[]"));
+            if (!Array.isArray(data)) throw new Error("Invalid format");
 
-  const defaultRules = [
-    {
-      keyword:'75%v/v',
-      shortName:'12แผ่น 1ห่อ'
-    },
-    {
-      keyword:'baby wipes 80',
-      shortName:'เด้งม่วง 1ลัง'
-    }
-  ];
+            const normalized = data
+              .filter(x => x && x.keyword && x.shortName)
+              .map(x => ({
+                id: x.id || Date.now() + Math.random(),
+                keyword: cleanText(x.keyword),
+                shortName: cleanText(x.shortName)
+              }));
 
-  const [input,setInput] = useState('');
+            setRules(prev => {
+              const merged = [...normalized, ...prev];
+              const unique = [];
+              const seen = new Set();
+              for (const item of merged) {
+                const key = item.keyword.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                unique.push(item);
+              }
+              return unique;
+            });
 
-  const [rules,setRules] = useState(() => {
+            toast(`นำเข้ากฎสำเร็จ ${normalized.length} รายการ`);
+          } catch (err) {
+            console.error(err);
+            toast("ไฟล์กฎไม่ถูกต้อง", "error");
+          }
+        };
+        reader.readAsText(file, "utf-8");
+        e.target.value = "";
+      }
 
-    const saved = localStorage.getItem('skuRules');
+      function exportRules() {
+        const blob = new Blob([JSON.stringify(rules, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `packmaster_rules_${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast("ส่งออกกฎแล้ว");
+      }
 
-    return saved
-      ? JSON.parse(saved)
-      : defaultRules;
-  });
+      function copyOutput() {
+        navigator.clipboard.writeText(summaryOutput.join("\n"));
+        toast("คัดลอกผลลัพธ์แล้ว");
+      }
 
-  const [keyword,setKeyword] = useState('');
-  const [shortName,setShortName] = useState('');
-
-  useEffect(() => {
-    localStorage.setItem(
-      'skuRules',
-      JSON.stringify(rules)
-    );
-  }, [rules]);
-
-  const parsed = useMemo(() => {
-    return parseShopeeItems(input);
-  }, [input]);
-
-  const output = useMemo(() => {
-
-    const skuMap = new Map();
-
-    parsed.forEach(item => {
-
-      const matchedRule = rules.find(rule =>
-        item.name
-          .toLowerCase()
-          .includes(rule.keyword.toLowerCase())
-      );
-
-      if(!matchedRule) return;
-
-      const currentQty =
-        skuMap.get(matchedRule.shortName) || 0;
-
-      skuMap.set(
-        matchedRule.shortName,
-        currentQty + item.qty
-      );
-    });
-
-    const arr = [];
-
-    skuMap.forEach((qty,name) => {
-
-      arr.push(
-        qty > 1
-          ? `${name} x${qty}`
-          : name
-      );
-    });
-
-    return arr;
-
-  }, [parsed, rules]);
-
-  function addRule(){
-
-    if(!keyword || !shortName) return;
-
-    setRules([
-      {
-        keyword,
-        shortName
-      },
-      ...rules
-    ]);
-
-    setKeyword('');
-    setShortName('');
-  }
-
-  function removeRule(index){
-
-    const copy = [...rules];
-
-    copy.splice(index,1);
-
-    setRules(copy);
-  }
-
-  function copyOutput(){
-
-    navigator.clipboard.writeText(
-      output.join('\n')
-    );
-
-    alert('คัดลอกแล้ว');
-  }
-
-  function loadExample(){
-
-    setInput(`
+      function loadSample() {
+        setRawText(`
 1
 โฮญ่า ทิชชู่เปียก สูตรแอลกอฮอล์ 75%v/v 12 แผ่นใหญ่ HOYA
 1
-
 2
 (ยกลัง24ห่อ ไม่มีน้ำหอม) HOYA ทิชชู่เปียก baby Wipes 80แผ่น/
 ห่อ x 24แพ็ค สูตรอ่อนโยน สำหรับผิวบอบบาง
 1
-`);
-  }
+        `.trim());
+        setActiveTab("preview");
+      }
 
-  return(
-    <div className="max-w-7xl mx-auto p-10">
+      function clearAll() {
+        setOrders([]);
+        setRawText("");
+        toast("ล้างข้อมูลแล้ว");
+      }
 
-      <div className="flex justify-between items-center mb-10">
+      const testResult = useMemo(() => {
+        if (!cleanText(testInput)) return "";
+        const rule = matchRule(testInput, rules);
+        if (!rule) return "ไม่พบคีย์เวิร์ด";
+        return rule.shortName;
+      }, [testInput, rules]);
 
-        <div>
+      return (
+        <div className="min-h-screen text-slate-900">
+          {message && (
+            <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl shadow-xl border bg-white ${
+              messageType === "error" ? "border-red-200 text-red-600" : "border-emerald-200 text-emerald-700"
+            }`}>
+              <span className="font-bold">{message}</span>
+            </div>
+          )}
 
-          <h1 className="text-5xl font-black text-slate-900 mb-3">
-            PackMaster V51
-          </h1>
-
-          <p className="text-slate-500 text-lg">
-            Multi SKU Production Parser
-          </p>
-
-        </div>
-
-        <button
-          onClick={loadExample}
-          className="bg-slate-900 text-white px-6 py-4 rounded-2xl font-bold"
-        >
-          โหลดตัวอย่าง
-        </button>
-
-      </div>
-
-      <div className="grid grid-cols-12 gap-8">
-
-        {/* LEFT */}
-
-        <div className="col-span-5">
-
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-
-            <div className="flex justify-between items-center mb-5">
-
-              <h2 className="text-2xl font-black">
-                Raw PDF Text
-              </h2>
-
-              <div className="text-sm text-slate-400">
-                Paste PDF Text
+          <div className="flex min-h-screen">
+            <aside className="w-72 bg-white border-r border-slate-200 p-6 hidden xl:flex flex-col">
+              <div className="flex items-center gap-4 pb-6 border-b border-slate-100">
+                <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white grid place-items-center font-black">P</div>
+                <div>
+                  <div className="text-2xl font-black leading-none">PackMaster</div>
+                  <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400 mt-2">Navy Minimal</div>
+                </div>
               </div>
 
-            </div>
+              <nav className="mt-8 space-y-3">
+                <button onClick={() => setActiveTab("upload")} className={`w-full text-left px-5 py-4 rounded-2xl border ${activeTab === "upload" ? "bg-slate-100 border-slate-300 font-bold" : "border-transparent hover:bg-slate-50"}`}>อัปโหลดไฟล์</button>
+                <button onClick={() => setActiveTab("mapping")} className={`w-full text-left px-5 py-4 rounded-2xl border ${activeTab === "mapping" ? "bg-slate-100 border-slate-300 font-bold" : "border-transparent hover:bg-slate-50"}`}>ตั้งค่า SKU</button>
+                <button onClick={() => setActiveTab("preview")} className={`w-full text-left px-5 py-4 rounded-2xl border ${activeTab === "preview" ? "bg-slate-100 border-slate-300 font-bold" : "border-transparent hover:bg-slate-50"}`}>พรีวิว & สรุป</button>
+              </nav>
+            </aside>
 
-            <textarea
-              value={input}
-              onChange={(e)=>setInput(e.target.value)}
-              className="w-full h-[700px] border border-slate-200 rounded-2xl p-5 font-mono text-sm outline-none"
-            />
+            <main className="flex-1 p-5 xl:p-8">
+              <div className="max-w-[1600px] mx-auto">
+                <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-8">
+                  <div>
+                    <h1 className="text-4xl lg:text-5xl font-black tracking-tight">PackMaster V52</h1>
+                    <p className="text-slate-500 mt-2">อัปโหลด PDF / นำเข้า JSON / ทดลองใช้งานจริงได้ทันที</p>
+                  </div>
 
-          </div>
+                  <div className="flex flex-wrap gap-3">
+                    <button onClick={loadSample} className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-bold">โหลดตัวอย่าง</button>
+                    <button onClick={copyOutput} className="px-5 py-3 rounded-2xl bg-white border border-slate-200 font-bold">Copy Output</button>
+                    <button onClick={clearAll} className="px-5 py-3 rounded-2xl bg-white border border-slate-200 font-bold">ล้างทั้งหมด</button>
+                  </div>
+                </div>
 
-        </div>
-
-        {/* CENTER */}
-
-        <div className="col-span-3">
-
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-
-            <h2 className="text-2xl font-black mb-5">
-              SKU Mapping
-            </h2>
-
-            <div className="space-y-4 mb-6">
-
-              <input
-                placeholder="Keyword"
-                value={keyword}
-                onChange={(e)=>setKeyword(e.target.value)}
-                className="w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <input
-                placeholder="Short Name"
-                value={shortName}
-                onChange={(e)=>setShortName(e.target.value)}
-                className="w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <button
-                onClick={addRule}
-                className="w-full bg-slate-900 text-white py-3 rounded-2xl font-bold"
-              >
-                เพิ่ม Mapping
-              </button>
-
-            </div>
-
-            <div className="space-y-3 max-h-[500px] overflow-auto">
-
-              {rules.map((rule,index)=>(
-
-                <div
-                  key={index}
-                  className="border border-slate-200 rounded-2xl p-4"
-                >
-
-                  <div className="flex justify-between items-start mb-4">
-
-                    <div>
-
-                      <div className="text-xs font-bold text-slate-400 mb-1">
-                        KEYWORD
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                  <section className={`${activeTab === "upload" ? "block" : "hidden xl:block"} xl:col-span-5`}>
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+                      <div className="flex items-center justify-between mb-5">
+                        <div>
+                          <h2 className="text-2xl font-black">อัปโหลดไฟล์</h2>
+                          <p className="text-sm text-slate-500 mt-1">รองรับ PDF และ TXT text export</p>
+                        </div>
+                        {loading && <div className="text-sm font-bold text-slate-500">กำลังอ่านไฟล์...</div>}
                       </div>
 
-                      <div className="font-black">
-                        {rule.keyword}
+                      <div className="grid gap-4">
+                        <label className="block border-2 border-dashed border-slate-300 rounded-3xl p-8 text-center cursor-pointer hover:bg-slate-50">
+                          <input type="file" multiple accept=".pdf" className="hidden" onChange={handlePdfUpload} />
+                          <div className="text-5xl mb-3">📄</div>
+                          <div className="font-black text-xl">เลือกไฟล์ PDF</div>
+                          <div className="text-slate-500 mt-2">อัปโหลดใบปะหน้า / ใบสั่งซื้อหลายไฟล์ได้</div>
+                        </label>
+
+                        <label className="block border border-slate-200 rounded-3xl p-6 cursor-pointer hover:bg-slate-50">
+                          <input type="file" accept=".txt,.log,.csv" className="hidden" onChange={handleTextInputUpload} />
+                          <div className="font-bold">นำเข้า text export</div>
+                          <div className="text-sm text-slate-500 mt-1">ใช้กรณีทดสอบจากข้อความที่ extract แล้ว</div>
+                        </label>
+
+                        <button onClick={() => setActiveTab("mapping")} className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-bold">
+                          ไปตั้งค่า SKU
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className={`${activeTab === "mapping" ? "block" : "hidden xl:block"} xl:col-span-3`}>
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+                      <div className="flex items-center justify-between mb-5">
+                        <div>
+                          <h2 className="text-2xl font-black">SKU Mapping</h2>
+                          <p className="text-sm text-slate-500 mt-1">ตั้งคีย์เวิร์ดกับชื่อย่อ</p>
+                        </div>
                       </div>
 
+                      <div className="space-y-3">
+                        <input
+                          value={newRule.keyword}
+                          onChange={(e) => setNewRule({ ...newRule, keyword: e.target.value })}
+                          placeholder="Keyword"
+                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-slate-100"
+                        />
+                        <input
+                          value={newRule.shortName}
+                          onChange={(e) => setNewRule({ ...newRule, shortName: e.target.value })}
+                          placeholder="Short Name"
+                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-slate-100"
+                        />
+                        <div className="flex gap-2">
+                          <button onClick={addRule} className="flex-1 px-5 py-3 rounded-2xl bg-slate-900 text-white font-bold">
+                            {editingId ? "บันทึก" : "เพิ่ม"}
+                          </button>
+                          <button onClick={exportRules} className="px-5 py-3 rounded-2xl bg-white border border-slate-200 font-bold">
+                            Export
+                          </button>
+                        </div>
+
+                        <label className="block px-4 py-3 rounded-2xl border border-slate-200 cursor-pointer hover:bg-slate-50 text-center font-bold">
+                          <input type="file" accept=".json" className="hidden" onChange={importRulesFile} />
+                          Import JSON
+                        </label>
+                      </div>
+
+                      <div className="mt-6 space-y-3 max-h-[420px] overflow-auto thin-scrollbar pr-1">
+                        {rules.map(rule => (
+                          <div key={rule.id} className="p-4 rounded-2xl border border-slate-200">
+                            <div className="text-[11px] font-black tracking-[0.2em] text-slate-400">KEYWORD</div>
+                            <div className="font-bold mt-1">{rule.keyword}</div>
+                            <div className="text-[11px] font-black tracking-[0.2em] text-slate-400 mt-4">OUTPUT</div>
+                            <div className="mt-1 bg-slate-100 rounded-xl px-4 py-3 font-bold">{rule.shortName}</div>
+                            <div className="flex gap-2 mt-4">
+                              <button onClick={() => editRule(rule)} className="px-4 py-2 rounded-xl border border-slate-200 font-bold">Edit</button>
+                              <button onClick={() => removeRule(rule.id)} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold">Delete</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className={`${activeTab === "preview" ? "block" : "hidden xl:block"} xl:col-span-4`}>
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6 mb-6">
+                      <div className="flex items-center justify-between mb-5">
+                        <div>
+                          <h2 className="text-2xl font-black">Preview</h2>
+                          <p className="text-sm text-slate-500 mt-1">ผลการอ่านไฟล์และจับคู่ SKU</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3 text-center mb-5">
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <div className="text-xs text-slate-500">Items</div>
+                          <div className="text-2xl font-black">{parsedItems.length}</div>
+                        </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <div className="text-xs text-slate-500">Matched</div>
+                          <div className="text-2xl font-black">{mappedItems.filter(x => x.matchedRule).length}</div>
+                        </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <div className="text-xs text-slate-500">Output</div>
+                          <div className="text-2xl font-black">{summaryOutput.length}</div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 max-h-[360px] overflow-auto thin-scrollbar pr-1">
+                        {mappedItems.length === 0 && (
+                          <div className="text-slate-400 text-center py-10">ยังไม่มีข้อมูล</div>
+                        )}
+
+                        {mappedItems.map((item, idx) => (
+                          <div key={idx} className="rounded-2xl border border-slate-200 p-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <div className="font-black">ITEM #{item.itemNo}</div>
+                                <div className="text-sm text-slate-600 mt-2 leading-relaxed">{item.name}</div>
+                              </div>
+                              <div className={`px-3 py-1 rounded-xl text-sm font-black ${item.matchedRule ? "bg-blue-100 text-blue-900" : "bg-red-50 text-red-600"}`}>
+                                x{item.qty}
+                              </div>
+                            </div>
+                            <div className="mt-4 text-sm">
+                              <span className="text-slate-400 font-bold">LABEL: </span>
+                              <span className="font-black">{item.display}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
-                    <button
-                      onClick={()=>removeRule(index)}
-                      className="text-red-500 font-bold"
-                    >
-                      ลบ
-                    </button>
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+                      <div className="flex items-center justify-between mb-5">
+                        <h2 className="text-2xl font-black">Final Output</h2>
+                        <button onClick={copyOutput} className="px-4 py-2 rounded-xl bg-slate-900 text-white font-bold">Copy</button>
+                      </div>
 
-                  </div>
-
-                  <div className="text-xs font-bold text-slate-400 mb-1">
-                    OUTPUT
-                  </div>
-
-                  <div className="bg-slate-100 rounded-xl px-4 py-3 font-black">
-                    {rule.shortName}
-                  </div>
-
+                      <div className="space-y-3">
+                        {summaryOutput.length === 0 ? (
+                          <div className="text-slate-400 text-center py-10">ยังไม่พบ SKU ที่จับคู่ได้</div>
+                        ) : (
+                          summaryOutput.map((line, idx) => (
+                            <div key={idx} className="rounded-2xl bg-slate-900 text-white px-5 py-4 font-black text-lg">
+                              • {line}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </section>
                 </div>
 
-              ))}
-
-            </div>
-
+                <section className="mt-6 bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+                  <h2 className="text-xl font-black mb-3">ทดสอบ Keyword</h2>
+                  <div className="grid lg:grid-cols-[1fr_220px] gap-3">
+                    <input
+                      value={testInput}
+                      onChange={(e) => setTestInput(e.target.value)}
+                      placeholder="พิมพ์ชื่อสินค้าทดลอง..."
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-4 focus:ring-slate-100"
+                    />
+                    <div className="px-4 py-3 rounded-2xl bg-slate-50 font-bold flex items-center justify-center">
+                      {testResult || "-"}
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </main>
           </div>
-
         </div>
+      );
+    }
 
-        {/* RIGHT */}
-
-        <div className="col-span-4">
-
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 mb-6">
-
-            <h2 className="text-2xl font-black mb-5">
-              Parsed Items
-            </h2>
-
-            <div className="space-y-4 max-h-[350px] overflow-auto">
-
-              {parsed.map((item,index)=>(
-
-                <div
-                  key={index}
-                  className="border border-slate-200 rounded-2xl p-4"
-                >
-
-                  <div className="flex justify-between items-center mb-3">
-
-                    <div className="font-black">
-                      ITEM #{item.itemNo}
-                    </div>
-
-                    <div className="bg-blue-100 text-blue-900 px-3 py-1 rounded-xl font-black">
-                      x{item.qty}
-                    </div>
-
-                  </div>
-
-                  <div className="text-sm text-slate-600 leading-relaxed">
-                    {item.name}
-                  </div>
-
-                </div>
-
-              ))}
-
-            </div>
-
-          </div>
-
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-
-            <div className="flex justify-between items-center mb-5">
-
-              <h2 className="text-2xl font-black">
-                Final Label Output
-              </h2>
-
-              <button
-                onClick={copyOutput}
-                className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold"
-              >
-                Copy
-              </button>
-
-            </div>
-
-            <div className="space-y-4">
-
-              {output.length === 0 && (
-
-                <div className="text-slate-400 text-center py-10">
-                  ไม่มีข้อมูล
-                </div>
-
-              )}
-
-              {output.map((item,index)=>(
-
-                <div
-                  key={index}
-                  className="bg-slate-900 text-white rounded-2xl px-5 py-5 font-black text-2xl"
-                >
-                  • {item}
-                </div>
-
-              ))}
-
-            </div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-  )
-}
-
-const root = ReactDOM.createRoot(
-  document.getElementById('root')
-);
-
-root.render(<App />);
-
-</script>
-
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
 </body>
 </html>
